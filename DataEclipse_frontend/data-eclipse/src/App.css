@@ -1,0 +1,17 @@
+.App {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  background-color: #f9f9f9;
+  color: #333;
+  min-height: 100vh;
+}
+
+header, footer {
+  background-color: #282c34;
+  color: white;
+  padding: 20px;
+}
+
+main {
+  padding: 20px;
+}

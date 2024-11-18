@@ -8,11 +8,13 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, Grad
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.svm import SVC, SVR
 from sklearn.neural_network import MLPClassifier, MLPRegressor
-from xgboost import XGBClassifier, XGBRegressor
+#from xgboost import XGBClassifier, XGBRegressor
 from sklearn.naive_bayes import GaussianNB
 from sklearn.metrics import accuracy_score, r2_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import json
+import os
 
 def get_model(problem_type):
     """
@@ -29,7 +31,7 @@ def get_model(problem_type):
             'logistic_regression': LogisticRegression(random_state=42),
             'decision_tree': DecisionTreeClassifier(random_state=42),
             'random_forest': RandomForestClassifier(n_estimators=100, random_state=42),
-            'xgboost': XGBClassifier(random_state=42),
+            # 'xgboost': XGBClassifier(random_state=42),
             'knn': KNeighborsClassifier(),
             'svm': SVC(random_state=42),
             'naive_bayes': GaussianNB(),
@@ -41,7 +43,7 @@ def get_model(problem_type):
             'linear_regression': LinearRegression(),
             'decision_tree': DecisionTreeRegressor(random_state=42),
             'random_forest': RandomForestRegressor(n_estimators=100, random_state=42),
-            'xgboost': XGBRegressor(random_state=42),
+            # 'xgboost': XGBRegressor(random_state=42),
             'knn': KNeighborsRegressor(),
             'svm': SVR(),
             'gradient_boosting': GradientBoostingRegressor(random_state=42),
@@ -50,20 +52,27 @@ def get_model(problem_type):
     else:
         raise ValueError("problem_type must be either 'classification' or 'regression'")
 
-
-def run_ml_pipeline(df, target_column):
+def run_ml_pipeline(df, target_column, output_dir='outputs'):
     """
     Complete ML pipeline that automatically detects problem type and runs all relevant models
     
     Args:
         df: Input DataFrame (cleaned)
         target_column: Name of target variable
+        output_dir: Directory to save outputs (default: 'outputs')
     
     Returns:
         Tuple containing:
-        1. Dictionary with model comparisons (JSON-friendly)
+        1. Frontend-friendly JSON with model comparisons
         2. Dictionary of feature importance plots
     """
+    # Create output directories if they don't exist
+    os.makedirs(f'{output_dir}/results', exist_ok=True)
+    os.makedirs(f'{output_dir}/plots', exist_ok=True)
+    
+    # Initialize feature importance plots dictionary
+    feature_importance_plots = {}
+    
     # Automatically detect problem type
     unique_values = df[target_column].nunique()
     problem_type = 'classification' if unique_values < 10 else 'regression'
@@ -71,11 +80,6 @@ def run_ml_pipeline(df, target_column):
     
     # Get all relevant models
     models = get_model(problem_type)
-    model_comparisons = {
-        "problem_type": problem_type,
-        "models": []
-    }
-    feature_importance_plots = {}
     
     # Prepare data once for all models
     X = df.drop(target_column, axis=1)
@@ -94,6 +98,20 @@ def run_ml_pipeline(df, target_column):
     print(f"{'Model':<20} {'Train Score':>15} {'Test Score':>15}")
     print("-" * 50)
     
+    # Create frontend-friendly JSON structure
+    frontend_json = {
+        "modelComparison": {
+            "problemType": problem_type,
+            "targetVariable": target_column,
+            "metrics": {
+                "type": "accuracy" if problem_type == 'classification' else "r2_score",
+                "description": "Classification accuracy (0-1)" if problem_type == 'classification' else "R-squared score (0-1)"
+            },
+            "models": [],
+            "bestModel": None
+        }
+    }
+    
     # Train and evaluate each model
     for model_name, model in models.items():
         try:
@@ -108,60 +126,94 @@ def run_ml_pipeline(df, target_column):
             if problem_type == 'classification':
                 train_score = float(accuracy_score(y_train, train_pred))
                 test_score = float(accuracy_score(y_test, test_pred))
-                metric_name = "accuracy"
             else:
                 train_score = float(r2_score(y_train, train_pred))
                 test_score = float(r2_score(y_test, test_pred))
-                metric_name = "r2_score"
             
-            # Store model results
-            model_comparisons["models"].append({
-                "model_name": model_name,
-                "metrics": {
-                    "train_score": train_score,
-                    "test_score": test_score,
-                    "metric_type": metric_name
+            # Store model results in frontend-friendly format
+            model_result = {
+                "name": model_name,
+                "scores": {
+                    "train": round(train_score, 3),
+                    "test": round(test_score, 3)
                 }
-            })
+            }
             
-            print(f"{model_name:<20} {train_score:>15.3f} {test_score:>15.3f}")
-            
-            # Feature importance plot
+            # Add feature importance if available
             if hasattr(model, 'feature_importances_'):
                 feature_importance = pd.DataFrame({
                     'feature': X.columns,
                     'importance': model.feature_importances_
                 }).sort_values('importance', ascending=False)
                 
+                # Add feature importance to JSON
+                model_result["featureImportance"] = [
+                    {
+                        "feature": row['feature'],
+                        "importance": round(float(row['importance']), 3)
+                    }
+                    for _, row in feature_importance.head(10).iterrows()
+                ]
+                
+                # Create plot
                 plt.figure(figsize=(10, 6))
                 sns.barplot(x='importance', y='feature', data=feature_importance.head(10))
                 plt.title(f'Top 10 Feature Importance - {model_name}')
                 plt.tight_layout()
-                
                 feature_importance_plots[model_name] = plt
-                
-                # Add feature importance to JSON
-                model_comparisons["models"][-1]["feature_importance"] = feature_importance.head(10).to_dict('records')
+            
+            frontend_json["modelComparison"]["models"].append(model_result)
+            print(f"{model_name:<20} {train_score:>15.3f} {test_score:>15.3f}")
             
         except Exception as e:
             print(f"{model_name:<20} Failed to run: {str(e)}")
-            model_comparisons["models"].append({
-                "model_name": model_name,
+            frontend_json["modelComparison"]["models"].append({
+                "name": model_name,
                 "error": str(e)
             })
     
     # Sort models by test score
-    model_comparisons["models"].sort(key=lambda x: x.get("metrics", {}).get("test_score", -1), reverse=True)
+    frontend_json["modelComparison"]["models"].sort(
+        key=lambda x: x.get("scores", {}).get("test", -1) 
+        if "scores" in x else -1, 
+        reverse=True
+    )
     
     # Add best model info
-    valid_models = [m for m in model_comparisons["models"] if "error" not in m]
+    valid_models = [m for m in frontend_json["modelComparison"]["models"] if "error" not in m]
     if valid_models:
         best_model = valid_models[0]
-        model_comparisons["best_model"] = {
-            "name": best_model["model_name"],
-            "test_score": best_model["metrics"]["test_score"]
+        frontend_json["modelComparison"]["bestModel"] = {
+            "name": best_model["name"],
+            "score": best_model["scores"]["test"]
         }
-        print(f"\nBest Model: {best_model['model_name']}")
-        print(f"Test Score: {best_model['metrics']['test_score']:.3f}")
+        print(f"\nBest Model: {best_model['name']}")
+        print(f"Test Score: {best_model['scores']['test']:.3f}")
+    # Create DataFrame for model comparisons
+    model_comparison_df = pd.DataFrame([
+        {
+            "Model Name": model["name"],
+            "Train Score": model.get("scores", {}).get("train", "N/A"),
+            "Test Score": model.get("scores", {}).get("test", "N/A")
+        }
+        for model in frontend_json["modelComparison"]["models"]
+    ])
     
-    return model_comparisons, feature_importance_plots
+    # Save as CSV
+    csv_path = f'{output_dir}/results/model_comparison.csv'
+    model_comparison_df.to_csv(csv_path, index=False)
+    print(f"✓ Model comparison CSV saved to {csv_path}")
+    # Save JSON file
+    json_path = f'{output_dir}/results/model_comparison.json'
+    with open(json_path, 'w') as f:
+        json.dump(frontend_json, f, indent=4)
+    print(f"\n✓ Model comparison saved to {json_path}")
+    
+    # Save feature importance plots
+    for model_name, plot in feature_importance_plots.items():
+        plot_path = f'{output_dir}/plots/{model_name}_importance.png'
+        plot.savefig(plot_path)
+        plot.close()
+    print(f"✓ Feature importance plots saved to {output_dir}/plots/")
+    
+    return frontend_json, feature_importance_plots
